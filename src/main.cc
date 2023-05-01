@@ -33,7 +33,14 @@ int main() {
     std::cerr << "failed to find the adder function";
   }
 
-  auto pso = device->newComputePipelineState(add_function, &error);
+
+  auto gen_randnums_fn_name = NS::String::string("generate_randomnumbers", NS::ASCIIStringEncoding);
+  auto gen_randnums_function = default_library->newFunction(gen_randnums_fn_name);
+  if (!add_function) {
+    std::cerr << "failed to find the adder function";
+  }
+
+  auto pso = device->newComputePipelineState(gen_randnums_function, &error);
   // free defualt library and add function
   add_arrays_function_name->release();
   default_library->release();
@@ -79,7 +86,7 @@ int main() {
   command_buffer->waitUntilCompleted();
 
   // read results from buffer
-  int * result = (int *)out->contents();
+  float * result = (float *)out->contents();
 
   std::cout << "results:" << std::endl;
   for (size_t i = 0; i < arraySize; ++i) {

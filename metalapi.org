@@ -1,9 +1,12 @@
-#+TITLE: Metal Graphics API
-#+SUBTITLE: Using Metal for Compute 
+#+TITLE: Metal
+#+SUBTITLE: Using Metal API for Compute
 #+OPTIONS: html-postamble:nil
 
 * Introduction
-I wanted to use the GPU for some intesive tasks in C++. Here is a note to self on how to do it.
+|This is a work-in-progress|
+
+I wanted to use the GPU for some intesive tasks in C++. However, I have a macbook so
+I guess we can try it using metal. Here is a note to self on how to do it.
 To make it clear, this is my first time working with CMake.
 
 * Project Structure
@@ -275,3 +278,110 @@ It took me a very long time to get my project to compile, but its all worth it b
 do all of this without using an XCode project.
 
 Now that I can add two arrays using metal, let's try rewriting my ray tracer using metal.
+
+* Addendum
+After encountering several problems, I have realised that turning my ray tracer into metal
+shader code is not as easy as initially thought. Here are some ranodm things I have learned
+so that my week of pain does not have to occur again:
+
+** Simd
+simd allows me to define vector types (like float3) that can be understood by the GPU as
+well. Thus, my C++ code and metal code can share custom classes by defining the
+class in a header file and leaving the implementation in metal (I think? As long as
+the constructor is defined in the header I dont see why not)
+
+** Compiling multiple metal files
+To create a single file metal lib file at the end, you will need to compile all your
+metal files into .air files (you do not need to worry about the header files). Then,
+run
+#+begin_src sh
+xcrun -sdk macosx metal-ar rcs <archive name> *.air
+#+end_src
+
+This should put all of your files into a single archive. You can then run ~metallib~ on
+that archive file.
+
+** Randomness
+Turns out, there is no random generator included in metal. So, if I need to generate a random
+number in my shader, I will have to include a custom library.
+Credits to this forum: [[https://developer.apple.com/forums/thread/26454][Apple Form]] \\
+
+If I need to seed my RNG, I can pass in a noise texture from my main code to the shaders. I haven't
+tested if this is necessary though
+
+** Writing to a 2D Output Buffer
+All the buffers I've worked with are 1D. How do I take my 2D array of float3's
+and write to them in metal?
+
+*** Textures
+So you need a texture. To initialize a texture:
+**** Building a Texture Descriptor
+In a descriptor, you will need to set the
+width, height, pixel format, texture type, storage mode, and usage.
+Example:
+#+begin_src C++
+  MTL::TextureDescriptor * desc = MTL::TextureDescriptor::alloc()->init();
+  desc->setWidth(800);
+  desc->setHeight(600);
+  desc->setPixelFormat(MTL::PixelFormatRGBA8Unorm);
+  desc->setTextureType(MTL::TextureType2D);
+  desc->setStorageMode(MTL::StorageModeManaged);
+  desc->setUsage(MTL::ResourceUsageRead | MTL::ResourceUsageWrite);
+#+end_src
+
+Here is the documentation for MTL::TextureDescriptor: [[https://developer.apple.com/documentation/metal/mtltexturedescriptor?language=objc][apol dot com]]
+
+TLDR:
+- width and height are self-explanatory
+- you can also set depth, for layers I guess?
+- pixel format determines how many channels (R, RG, RGBA) and how many bits per channel (8, 16), as well
+  as the data type of each component.
+- texture type describes the way the data is arranged, (1D, 2D, etc...)
+- Storage Mode determines where and who has the resources. MTLStorageModeShared stores
+  the resource in system memory and can be accessed by both CPU and GPU.
+  Managed requires you to manually synchronize the changes.
+- Usage enables reading or writing to the resource in a shader.
+
+**** Creating a texture
+You call ~device->newTexture(desc)~ and save it as a texture pointer:
+#+begin_src C++
+  MTL::Texture * myTexture = device->newTexture(desc);
+  desc->release();
+#+end_src
+
+You can free the description after creating the new texture.
+
+**** Passing the texture as an argument
+To pass a buffer into the function, you would do the following:
+#+begin_src C++
+  command_encoder->setBuffer(myBuffer, offset, index);
+#+end_src
+
+where offset tells you where the data begins from the start of the buffer (in bytes), and
+index is the index in the buffer argument table. This is not always
+correlated to the index of the argument passed into the function.
+
+You do a similar thing with textures:
+#+begin_src C++
+  command_encoder->setTexture(myTexture, index);
+#+end_src
+
+The difference is that you are passing in a texture and the index determines the index
+in the *texture* argument table.
+
+**** Your Shader
+Let's do an example of a shader that takes a matrix and an array and performs some
+calculation on it.
+#+begin_src C++
+  #include <metal_stdlib>
+  using namespace metal;
+
+  kernel void shader(texture2d<half, access:write> tex [[texture(0)]],
+                     device const float * a, uint2 index [[thread_position_in_grid]]) {
+    mt19937 mt;
+    mt.srand(index);
+    tex.write(float3(mt.rand(), mt.rand(), mt.rand()), index, 0);
+  }
+#+end_src
+
+**** TODO Reading the result
