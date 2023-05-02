@@ -1,3 +1,5 @@
+#include <climits>
+#include <simd/vector_types.h>
 #define NS_PRIVATE_IMPLEMENTATION
 #define CA_PRIVATE_IMPLEMENTATION
 #define MTL_PRIVATE_IMPLEMENTATION
@@ -6,74 +8,64 @@
 #include <QuartzCore/QuartzCore.hpp>
 
 #include <iostream>
+#include <limits>
+#include <simd/simd.h>
 
 int main() {
   // create device
-  MTL::Device * device = MTL::CreateSystemDefaultDevice();
-  NS::Error * error;
+  MTL::Device *device = MTL::CreateSystemDefaultDevice();
+  NS::Error *error;
 
   // create command queue
-  MTL::CommandQueue * command_queue = device->newCommandQueue();
+  MTL::CommandQueue *command_queue = device->newCommandQueue();
   // create command buffer
-  MTL::CommandBuffer * command_buffer = command_queue->commandBuffer();
+  MTL::CommandBuffer *command_buffer = command_queue->commandBuffer();
   // create command encoder
-  MTL::ComputeCommandEncoder * command_encoder = command_buffer->computeCommandEncoder();
+  MTL::ComputeCommandEncoder *command_encoder =
+      command_buffer->computeCommandEncoder();
 
   // ** Create pipeline state object
-  NS::String* libPath = NS::String::string("./shader.metallib", NS::UTF8StringEncoding);
+  NS::String *libPath =
+      NS::String::string("./shader.metallib", NS::UTF8StringEncoding);
   auto default_library = device->newLibrary(libPath, &error);
   if (!default_library) {
     std::cerr << "Failed to load default library.";
     std::exit(-1);
   }
 
-  auto add_arrays_function_name = NS::String::string("add_arrays", NS::ASCIIStringEncoding);
-  auto add_function = default_library->newFunction(add_arrays_function_name);
-  if (!add_function) {
-    std::cerr << "failed to find the adder function";
-  }
-
-
-  auto gen_randnums_fn_name = NS::String::string("generate_randomnumbers", NS::ASCIIStringEncoding);
-  auto gen_randnums_function = default_library->newFunction(gen_randnums_fn_name);
-  if (!add_function) {
+  auto gen_randnums_fn_name =
+      NS::String::string("generate_randomnumbers_2d", NS::ASCIIStringEncoding);
+  auto gen_randnums_function =
+      default_library->newFunction(gen_randnums_fn_name);
+  if (!gen_randnums_function) {
     std::cerr << "failed to find the adder function";
   }
 
   auto pso = device->newComputePipelineState(gen_randnums_function, &error);
   // free defualt library and add function
-  add_arrays_function_name->release();
+  gen_randnums_fn_name->release();
   default_library->release();
-  add_function->release();
 
   // pass pipeline state object created
   // into the command encoder
   command_encoder->setComputePipelineState(pso);
 
-
-  // ** Create data buffers
+  // ** Create texture
   // TODO: Make data and determine its size
-  int array1[] = {1, 2, 3, 4, 5, 6};
-  int array2[] = {1, 1, 1, 1, 1, 1};
-  size_t arraySize = 6;
-  size_t bufferSize = arraySize * sizeof(int);
+  MTL::TextureDescriptor *desc = MTL::TextureDescriptor::alloc()->init();
+  desc->setWidth(2);
+  desc->setHeight(3);
+  desc->setPixelFormat(MTL::PixelFormatRGBA8Unorm);
+  desc->setTextureType(MTL::TextureType2D);
+  desc->setStorageMode(MTL::StorageModeManaged);
+  desc->setUsage(MTL::ResourceUsageRead | MTL::ResourceUsageWrite);
+  MTL::Texture *out = device->newTexture(desc);
+  desc->release();
 
-  MTL::Buffer * a = device->newBuffer(bufferSize, MTL::ResourceStorageModeShared);
-  MTL::Buffer * b = device->newBuffer(bufferSize, MTL::ResourceStorageModeShared);
-  MTL::Buffer * out = device->newBuffer(bufferSize, MTL::ResourceStorageModeShared);
+  // add argument to cmd encoder
+  command_encoder->setTexture(out, 0);
 
-  // copy data into buffers
-  memcpy(a->contents(), array1, bufferSize);
-  memcpy(b->contents(), array2, bufferSize);
-
-  // pass argument data into the command encoder
-  command_encoder->setBuffer(a, 0, 0);
-  command_encoder->setBuffer(b, 0, 1);
-  command_encoder->setBuffer(out,0, 2);
-
-  // set thread count and organization, then run the damn thing
-  MTL::Size gridSize = MTL::Size(arraySize, 1, 1);
-
+  MTL::Size gridSize = MTL::Size(out->width(), out->height(), 1);
   NS::UInteger threadsPerThreadgroup = pso->maxTotalThreadsPerThreadgroup();
   MTL::Size threadgroupSize(threadsPerThreadgroup, 1, 1);
 
@@ -81,24 +73,36 @@ int main() {
   command_encoder->endEncoding();
 
   command_buffer->commit();
-
   // wait for the GPU work is done
   command_buffer->waitUntilCompleted();
 
-  // read results from buffer
-  float * result = (float *)out->contents();
+  // ** read results from buffer
+  int bytesPerRow = out->width() * sizeof(simd::uchar4);
+  int bytesPerImage = out->height() * bytesPerRow;
 
+  MTL::Region destinationRegion = MTL::Region::Make2D(0, 0, out->width(), out->height());
+
+  simd::uchar4 *pixelBytes = (simd::uchar4 *)malloc(bytesPerImage);
+  out->getBytes(pixelBytes, bytesPerRow, destinationRegion, 0);
+
+  // simd::uchar4 * rgbaPixel = (simd::uchar4 *)pixelBytes;
+
+  int length = out->width() * out->height();
   std::cout << "results:" << std::endl;
-  for (size_t i = 0; i < arraySize; ++i) {
-    std::cout << result[i] << std::endl;
+  for (size_t i = 0; i < length; ++i) {
+    for (size_t j = 0; j < 4; ++j) {
+      std::cout << (float)pixelBytes[i][j]/ UCHAR_MAX  << " ";
+    }
+    std::cout << std::endl;
+
+    // std::cout << rgbaPixel[i] << std::endl;
   }
 
-  a->release();
-  b->release();
   out->release();
   pso->release();
   command_queue->release();
   device->release();
+  free(pixelBytes);
 
   return 0;
 }

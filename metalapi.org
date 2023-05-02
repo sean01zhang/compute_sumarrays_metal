@@ -3,8 +3,6 @@
 #+OPTIONS: html-postamble:nil
 
 * Introduction
-|This is a work-in-progress|
-
 I wanted to use the GPU for some intesive tasks in C++. However, I have a macbook so
 I guess we can try it using metal. Here is a note to self on how to do it.
 To make it clear, this is my first time working with CMake.
@@ -335,7 +333,9 @@ TLDR:
 - width and height are self-explanatory
 - you can also set depth, for layers I guess?
 - pixel format determines how many channels (R, RG, RGBA) and how many bits per channel (8, 16), as well
-  as the data type of each component.
+  as the data type of each component. UNorm means that floats in the range [0, 1] are stored as
+  an unsigned integer from 0 to UINT_MAX. \\
+  In the case of RGBA8Unorm, each component is 8 bits, ranging from 0 to $255$.
 - texture type describes the way the data is arranged, (1D, 2D, etc...)
 - Storage Mode determines where and who has the resources. MTLStorageModeShared stores
   the resource in system memory and can be accessed by both CPU and GPU.
@@ -369,6 +369,14 @@ You do a similar thing with textures:
 The difference is that you are passing in a texture and the index determines the index
 in the *texture* argument table.
 
+**** Finishing up Pipeline setup
+You need to decide how you want to dispatch the threads.
+#+begin_src C++
+  MTL::Size gridSize = MTL::Size(textureWidth, textureHeight, 1);
+  NS::UInteger maxThreads = pso->maxTotalThreadsPerThreadgroup();
+  MTL::Size threadgroupSize = MTL::Size(maxThreads, 1, 1);
+#+end_src
+
 **** Your Shader
 Let's do an example of a shader that takes a matrix and an array and performs some
 calculation on it.
@@ -376,12 +384,41 @@ calculation on it.
   #include <metal_stdlib>
   using namespace metal;
 
-  kernel void shader(texture2d<half, access:write> tex [[texture(0)]],
-                     device const float * a, uint2 index [[thread_position_in_grid]]) {
+  kernel void shader(texture2d<float, access:write> tex [[texture(0)]],
+                     uint2 index [[thread_position_in_grid]]) {
     mt19937 mt;
     mt.srand(index);
     tex.write(float3(mt.rand(), mt.rand(), mt.rand()), index, 0);
   }
 #+end_src
 
-**** TODO Reading the result
+**** Reading the result
+Next, the result needs to be read. This can be done using the ~getBytes()~ function.
+We will need to pass in four parameters:
+- A pointer to write to: Make sure you have allocated space for the data to be written to!
+- Number of bytes per row: In this case, it's 4 8-bit components (RGBA) per pixel multiplied by the
+  width of the texture
+- Destination region is just the region of pixels in the texture
+- Mipmap level is zero in our case.
+
+Example:
+#+begin_src C++
+  int bytesPerRow = out->width() * sizeof(simd::uchar4);
+  int bytesPerImage = out->height() * bytesPerRow;
+
+  MTL::Region destinationRegion = MTL::Region::Make2D(0, 0, out->width(), out->height());
+  simd::uchar4 * pixelBytes = (simd::uchar4 *) malloc(bytesPerImage);
+  out->getBytes(pixelBytes, bytesPerRow, destinationRegion, 0);
+
+  int length = out->width() * out->height();
+  std::cout << "results:" << std::endl;
+  for (size_t i = 0; i < length; ++i) {
+    for (size_t j = 0; j < 4; ++j) {
+      std::cout << (float)pixelBytes[i][j]/ UCHAR_MAX  << " ";
+    }
+    std::cout << std::endl;
+  }
+
+  free(pixelBytes);
+#+end_src
+
