@@ -171,11 +171,11 @@ int main() {
 
   // image
   const double aspect = 3.0 / 2.0;
-  const double img_width = 400;
+  const double img_width = 800;
   const double img_height = static_cast<int>(img_width / aspect);
 
   // image quality settings
-  const int samples_per_px = 15;
+  const int samples_per_px = 300;
   const int max_depth = 50;
 
   // world 
@@ -253,21 +253,21 @@ int main() {
   MTL::Size gridSize = MTL::Size(out->width(), out->height(), 1);
 
   NS::UInteger threadsPerThreadgroup = pso->maxTotalThreadsPerThreadgroup();
-  MTL::Size threadgroupSize(threadsPerThreadgroup, 1, 1);
+  MTL::Size threadgroupSize(20, 1, 1);
 
   command_encoder->dispatchThreads(gridSize, threadgroupSize);
   command_encoder->endEncoding();
 
-  auto sharedCapturer = MTL::CaptureManager::sharedCaptureManager();
-  auto customScope = sharedCapturer->newCaptureScope(device);
-  NS::String *labelName =
-      NS::String::string("debug pls", NS::UTF8StringEncoding);
-  customScope->setLabel(labelName);
-  sharedCapturer->setDefaultCaptureScope(customScope);
+  // auto sharedCapturer = MTL::CaptureManager::sharedCaptureManager();
+  // auto customScope = sharedCapturer->newCaptureScope(device);
+  // NS::String *labelName =
+  //     NS::String::string("debug pls", NS::UTF8StringEncoding);
+  // customScope->setLabel(labelName);
+  // sharedCapturer->setDefaultCaptureScope(customScope);
 
-  customScope->beginScope();
+  // customScope->beginScope();
   command_buffer->commit();
-  customScope->endScope();
+  // customScope->endScope();
 
   // wait for the GPU work is done
   command_buffer->waitUntilCompleted();
@@ -304,7 +304,7 @@ int main() {
   samplesPerPxBuffer->release();
   out->release();
 
-  labelName->release();
+  // labelName->release();
 
   pso->release();
   command_queue->release();
