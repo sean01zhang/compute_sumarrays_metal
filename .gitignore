@@ -9,3 +9,4 @@ build/
 
 # do not add packages to git
 lib/
+ltximg/
