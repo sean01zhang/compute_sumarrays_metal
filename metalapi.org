@@ -1,0 +1,277 @@
+#+TITLE: Metal Graphics API
+#+SUBTITLE: Using Metal for Compute 
+#+OPTIONS: html-postamble:nil
+
+* Introduction
+I wanted to use the GPU for some intesive tasks in C++. Here is a note to self on how to do it.
+To make it clear, this is my first time working with CMake.
+
+* Project Structure
+We will need the metal-cpp library from Apple first. Then, place that into a folder called
+~lib~, under the root of the project. \\
+Then, we will use cmake to generate build files for the project.
+This is all new to me, so I decided to quickly ask Bing chat what it thought was
+a good idea:
+#+begin_src
+Here are some steps to set up a basic CMake that includes the Metal APIs:
+1. First, you need to install CMake on your system. You can download it from the official website.
+2. Next, you need to create a new CMake project and add the Metal APIs to it. You can do this by adding the following lines to your CMakeLists.txt file:
+
+```
+cmake_minimum_required(VERSION 3.0)
+project(MyMetalProject)
+
+set(CMAKE_CXX_STANDARD 14)
+
+find_library(METAL_LIBRARY Metal)
+find_library(CORE_FOUNDATION_LIBRARY CoreFoundation)
+
+add_executable(MyMetalProject main.cpp)
+
+target_link_libraries(MyMetalProject ${METAL_LIBRARY} ${CORE_FOUNDATION_LIBRARY})
+```
+
+3. Now you can create a new file called main.cpp and add some code that uses the Metal APIs.
+
+4. Finally, you can build your project using CMake and run it.
+
+I hope this helps! Let me know if you have any other questions.
+#+end_src
+
+** Source Files
+We will put the code under a folder called ~src/~. We name our starting point ~main.cpp~, but you can
+name it something else if you please. Just make sure you update the Cmake file.
+
+** Building Project
+First, we have to configure cmake. This is a bit different from the CMakeLists suggested from Bing above.
+I encountered problems with ~find_library~ finding the ~CoreFoundation~ library. I specified ~NO_DEFAULT_PATH~, which resolved it finding a CoreFoundation library on my
+system rather than in the project, but then it couldn't find the one in my project even when I gave it hints.
+Instead, I decided to ditch that and manually input the frameworks as shown:
+
+*CMakeLists.txt*
+#+begin_src c :tangle CMakeLists.txt
+cmake_minimum_required (VERSION 3.20)
+project (compute_sumarrays)
+
+set(CMAKE_CXX_STANDARD 17)
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Werror")
+
+include_directories(${CMAKE_SOURCE_DIR}/lib/metal-cpp)
+
+add_executable(compute_sumarrays
+  ./src/main.cc
+)
+
+target_link_libraries(compute_sumarrays
+  stdc++ 
+  "-framework Metal"
+  "-framework Foundation"
+  "-framework QuartzCore"
+  objc
+)
+#+end_src
+
+Place this file in the root of your directory. The reason why I commented out the flags
+is because one of the header files in the metal-cpp library is triggering a warning.
+
+Now that your ~CMakeLists.txt~ file is set up, here is what to do next:
+#+begin_src bash
+  # you should be in the root of your project
+  pwd
+
+  mkdir build
+  cd build
+  # start configuration, 2nd argument is
+  # the path to the CMakeLists.txt directory.
+  cmake ../
+#+end_src
+
+This will generate a Makefile in your ~build~ directory.
+You do not need to do anything to that file. When ready to
+build, just type ~make~ in that directory, and it will
+create an executable which will have the same name as your project.
+
+* Initialization
+Once all the structure is there, we move on to the main file of our project.
+We need to set up a compute pipeline for metal. I referenced [[https://developer.apple.com/documentation/metal/performing_calculations_on_a_gpu?language=objc][this]] to help me get started.
+There are a few changes that I made, the first one being that I need to import the metal library by providing the path
+to a compiled ~.metallib~ file (more on that later). Everything else is mostly the same.
+
+#+NAME: StartingPoint
+#+begin_src C++ :tangle ./src/main.cc
+  #define NS_PRIVATE_IMPLEMENTATION
+  #define CA_PRIVATE_IMPLEMENTATION
+  #define MTL_PRIVATE_IMPLEMENTATION
+  #include <Foundation/Foundation.hpp>
+  #include <Metal/Metal.hpp>
+  #include <QuartzCore/QuartzCore.hpp>
+
+  #include <iostream>
+
+  int main() {
+    // create device
+    MTL::Device * device = MTL::CreateSystemDefaultDevice();
+    NS::Error * error;
+
+    // create command queue
+    MTL::CommandQueue * command_queue = device->newCommandQueue();
+    // create command buffer
+    MTL::CommandBuffer * command_buffer = command_queue->commandBuffer();
+    // create command encoder
+    MTL::ComputeCommandEncoder * command_encoder = command_buffer->computeCommandEncoder();
+
+    // ** Create pipeline state object
+    NS::String* libPath = NS::String::string("./shader.metallib", NS::UTF8StringEncoding);
+    auto default_library = device->newLibrary(libPath, &error);
+    if (!default_library) {
+      std::cerr << "Failed to load default library.";
+      std::exit(-1);
+    }
+
+    auto add_arrays_function_name = NS::String::string("add_arrays", NS::ASCIIStringEncoding);
+    auto add_function = default_library->newFunction(add_arrays_function_name);
+    if (!add_function) {
+      std::cerr << "failed to find the adder function";
+    }
+
+    auto pso = device->newComputePipelineState(add_function, &error);
+    // free defualt library and add function
+    add_arrays_function_name->release();
+    default_library->release();
+    add_function->release();
+
+    // pass pipeline state object created
+    // into the command encoder
+    command_encoder->setComputePipelineState(pso);
+
+
+    // ** Create data buffers
+    // TODO: Make data and determine its size
+    int array1[] = {1, 2, 3, 4, 5, 6};
+    int array2[] = {1, 1, 1, 1, 1, 1};
+    size_t arraySize = 6;
+    size_t bufferSize = arraySize * sizeof(int);
+
+    MTL::Buffer * a = device->newBuffer(bufferSize, MTL::ResourceStorageModeShared);
+    MTL::Buffer * b = device->newBuffer(bufferSize, MTL::ResourceStorageModeShared);
+    MTL::Buffer * out = device->newBuffer(bufferSize, MTL::ResourceStorageModeShared);
+
+    // copy data into buffers
+    memcpy(a->contents(), array1, bufferSize);
+    memcpy(b->contents(), array2, bufferSize);
+
+    // pass argument data into the command encoder
+    command_encoder->setBuffer(a, 0, 0);
+    command_encoder->setBuffer(b, 0, 1);
+    command_encoder->setBuffer(out,0, 2);
+
+    // set thread count and organization, then run the damn thing
+    MTL::Size gridSize = MTL::Size(arraySize, 1, 1);
+
+    NS::UInteger threadsPerThreadgroup = pso->maxTotalThreadsPerThreadgroup();
+    MTL::Size threadgroupSize(threadsPerThreadgroup, 1, 1);
+
+    command_encoder->dispatchThreads(gridSize, threadgroupSize);
+    command_encoder->endEncoding();
+
+    command_buffer->commit();
+
+    // wait for the GPU work is done
+    command_buffer->waitUntilCompleted();
+
+    // read results from buffer
+    int * result = (int *)out->contents();
+
+    std::cout << "results:" << std::endl;
+    for (size_t i = 0; i < arraySize; ++i) {
+      std::cout << result[i] << std::endl;
+    }
+
+    a->release();
+    b->release();
+    out->release();
+    pso->release();
+    command_queue->release();
+    device->release();
+
+    return 0;
+  }
+#+end_src
+
+
+* Our shader code
+Note: Apple has documentation on [[https://developer.apple.com/documentation/metal/performing_calculations_on_a_gpu?language=objc][metal]]. You can even read the shading language reference [[https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf][here]].
+Metal has a lot of similarities to C++14. Here is the add arrays function that we will create:
+#+begin_src c :tangle ./src/shader.metal
+  kernel void add_arrays(device const int * a, device const int * b,
+                         device int * result, uint index [[thread_position_in_grid]]) {
+    result[index] = a[index] + b[index];
+  }
+#+end_src
+
+* Running the project
+I want to be able to decouple myself from XCode as far as possible. Hence why I used CMake.
+Here is how my project is structured at the moment:
+#+begin_src
+  .
+  ├── CMakeLists.txt
+  ├── build
+  │   ├── CMakeCache.txt
+  │   ├── CMakeFiles
+  │   │   └── ...
+  │   ├── Makefile
+  │   ├── buildshader.sh
+  │   ├── cmake_install.cmake
+  │   ├── compute_sumarrays
+  │   └── shader.metallib
+  ├── lib
+  │   └── metal-cpp
+  │       └── ...
+  ├── metalapi.html
+  ├── metalapi.org
+  └── src
+      ├── main.cc
+      ├── shader.metal
+      └── shader.metallib
+
+#+end_src
+
+** Compiling Your Metal Library
+Since we are not using XCode, we cannot use ~device->getDefaultLibrary()~ to magically compile and import our metal shaders.
+Hence, as hinted in the source code, we will have to compile our shaders into a metal library to import.
+
+You will need XCode Command Line Tools. See documentation [[https://developer.apple.com/documentation/metal/shader_libraries/compiling_shader_code_into_a_library_with_metal_s_command-line_tools?language=objc][here]] for full instructions on how to compile shader code.
+
+Here is a TLDR: \\
+1. Go to the directory with your ~shader.metal~ file.
+2. Run the following:
+   #+begin_src bash
+     xcrun -sdk macosx metal -c shader.metal -o shader.air
+     xcrun -sdk macosx metallib shader.air -o shader.metallib
+   #+end_src
+3. copy the shader.metallib file to your ~build~ directory.
+
+** Running your code
+Next, you will need to run ~make~ in your build directory. It will produce an executable.
+Then, run your program.
+#+begin_src sh
+  ./compute_sumarrays
+#+end_src
+
+*Output*
+#+RESULTS:
+| results: |
+|        2 |
+|        3 |
+|        4 |
+|        5 |
+|        6 |
+|        7 |
+
+Note: Every single time you change your source code, you will need to run ~make~ again.
+
+* Next Steps
+It took me a very long time to get my project to compile, but its all worth it because I can
+do all of this without using an XCode project.
+
+Now that I can add two arrays using metal, let's try rewriting my ray tracer using metal.
